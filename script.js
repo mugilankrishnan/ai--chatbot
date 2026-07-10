@@ -2,16 +2,40 @@ let sessionId = "session_" + Date.now();
 let isLight = false, voiceMode = false;
 let sessionTopics = {}, pinnedSessions = [], allSessions = [];
 
-async function loadTopics() {
-    const res = await fetch("/topics");
-    const data = await res.json();
-    sessionTopics = data.topics;
+function getToken() { return localStorage.getItem("nova_token"); }
+function getName() { return localStorage.getItem("nova_name"); }
+
+function authHeaders() {
+    return { "Content-Type": "application/json", "Authorization": "Bearer " + getToken() };
+}
+
+function checkAuth() {
+    if (!getToken()) window.location.href = "/login";
+}
+
+function logout() {
+    localStorage.removeItem("nova_token");
+    localStorage.removeItem("nova_name");
+    window.location.href = "/login";
+}
+
+function showUserInfo() {
+    const name = getName();
+    if (name) document.getElementById("userInfo").innerHTML = `Hello, <span>${name}</span>`;
 }
 
 function toggleSidebar() { document.getElementById("sidebar").classList.toggle("open"); }
 
+async function loadTopics() {
+    const res = await fetch("/topics", { headers: authHeaders() });
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json();
+    sessionTopics = data.topics;
+}
+
 async function loadSessions() {
-    const res = await fetch("/sessions");
+    const res = await fetch("/sessions", { headers: authHeaders() });
+    if (res.status === 401) { logout(); return; }
     const data = await res.json();
     allSessions = data.sessions;
     renderSessions(allSessions);
@@ -74,7 +98,7 @@ function searchSessions() {
 async function loadSession(id) {
     sessionId = id;
     document.getElementById("chatBox").innerHTML = "";
-    const res = await fetch("/history?session_id=" + id);
+    const res = await fetch("/history?session_id=" + id, { headers: authHeaders() });
     const data = await res.json();
     if (data.history.length === 0) { showWelcome(); return; }
     for (let i = 0; i < data.history.length; i++) {
@@ -88,7 +112,7 @@ async function loadSession(id) {
 }
 
 async function deleteSession(id) {
-    await fetch("/history?session_id=" + id, { method: "DELETE" });
+    await fetch("/history?session_id=" + id, { method: "DELETE", headers: authHeaders() });
     delete sessionTopics[id];
     pinnedSessions = pinnedSessions.filter(p => p !== id);
     if (id === sessionId) newChat(); else loadSessions();
@@ -100,7 +124,7 @@ async function renameSession(id) {
     const n = prompt("New name:", sessionTopics[id] || "New Chat");
     if (n) {
         sessionTopics[id] = n;
-        await fetch("/save-topic", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: id, topic: n }) });
+        await fetch("/save-topic", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: id, topic: n }) });
         renderSessions(allSessions);
     }
 }
@@ -122,15 +146,11 @@ function showWelcome() {
         </div>`;
 }
 
-function suggest(text) {
-    document.getElementById("userInput").value = text;
-    document.getElementById("userInput").focus();
-}
-
+function suggest(text) { document.getElementById("userInput").value = text; document.getElementById("userInput").focus(); }
 function toggleTheme() { isLight = !isLight; document.body.classList.toggle("light"); document.getElementById("themeBtn").textContent = isLight ? "Dark Mode" : "Light Mode"; }
 
 async function generateTopic(message) {
-    const res = await fetch("/generate-topic", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }) });
+    const res = await fetch("/generate-topic", { method: "POST", headers: authHeaders(), body: JSON.stringify({ message }) });
     return (await res.json()).topic;
 }
 
@@ -144,14 +164,14 @@ async function sendMessage() {
     if (!sessionTopics[sessionId]) {
         const topic = await generateTopic(message);
         sessionTopics[sessionId] = topic;
-        await fetch("/save-topic", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, topic }) });
+        await fetch("/save-topic", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, topic }) });
     }
 
     addUserMessage(message);
     await loadSessions();
     input.value = "";
     showTyping("NOVA AI is typing...");
-    const res = await fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, message }) });
+    const res = await fetch("/chat", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, message }) });
     const data = await res.json();
     removeTyping();
     await addBotMessage(data.reply, message, true);
@@ -162,7 +182,7 @@ async function sendMessage() {
 
 async function retryMessage(userMsg) {
     showTyping("NOVA AI is retrying...");
-    const res = await fetch("/retry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, message: userMsg }) });
+    const res = await fetch("/retry", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, message: userMsg }) });
     const data = await res.json();
     removeTyping();
     await addBotMessage(data.reply, userMsg, true);
@@ -171,7 +191,7 @@ async function retryMessage(userMsg) {
 async function editMessage(wrapper, oldText) {
     const newText = prompt("Edit your message:", oldText);
     if (!newText || newText === oldText) return;
-    await fetch("/edit-message", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, message: oldText }) });
+    await fetch("/edit-message", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, message: oldText }) });
     let next = wrapper.nextElementSibling;
     while (next) { const toRemove = next; next = next.nextElementSibling; toRemove.remove(); }
     wrapper.remove();
@@ -198,14 +218,14 @@ async function uploadImage(event) {
     showTyping("NOVA AI is analyzing image...");
     const formData = new FormData();
     formData.append("file", file);
-    const res = await fetch("/upload-image", { method: "POST", body: formData });
+    const res = await fetch("/upload-image", { method: "POST", headers: { "Authorization": "Bearer " + getToken() }, body: formData });
     const data = await res.json();
     removeTyping();
     await addBotMessage(data.reply, "image", true);
     if (!sessionTopics[sessionId]) {
         const topic = "Image: " + file.name;
         sessionTopics[sessionId] = topic;
-        await fetch("/save-topic", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, topic }) });
+        await fetch("/save-topic", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, topic }) });
         loadSessions();
     }
     event.target.value = "";
@@ -220,14 +240,14 @@ async function uploadFile(event) {
     showTyping("NOVA AI is reading file...");
     const formData = new FormData();
     formData.append("file", file);
-    const res = await fetch("/upload-file", { method: "POST", body: formData });
+    const res = await fetch("/upload-file", { method: "POST", headers: { "Authorization": "Bearer " + getToken() }, body: formData });
     const data = await res.json();
     removeTyping();
     await addBotMessage(data.reply, file.name, true);
     if (!sessionTopics[sessionId]) {
         const topic = "File: " + file.name;
         sessionTopics[sessionId] = topic;
-        await fetch("/save-topic", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_id: sessionId, topic }) });
+        await fetch("/save-topic", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, topic }) });
         loadSessions();
     }
     event.target.value = "";
@@ -275,16 +295,12 @@ async function addBotMessage(text, userMsg, animate) {
             chatBox.scrollTop = chatBox.scrollHeight;
             await new Promise(r => setTimeout(r, 30));
         }
-    } else {
-        div.innerHTML = marked.parse(text);
-    }
+    } else { div.innerHTML = marked.parse(text); }
 
-    // Add copy button to each code block
     div.querySelectorAll('pre').forEach(pre => {
         pre.style.position = "relative";
         const code = pre.querySelector('code');
         if (code) hljs.highlightElement(code);
-
         const copyBtn = document.createElement("button");
         copyBtn.className = "copy-code-btn";
         copyBtn.textContent = "Copy";
@@ -298,7 +314,6 @@ async function addBotMessage(text, userMsg, animate) {
 
     const actions = document.createElement("div");
     actions.className = "actions";
-
     const readBtn = document.createElement("button");
     readBtn.className = "action-btn";
     readBtn.textContent = "Read Aloud";
@@ -307,7 +322,6 @@ async function addBotMessage(text, userMsg, animate) {
         else { speakText(text, readBtn); }
     };
     actions.appendChild(readBtn);
-
     [
         { label: "Copy", fn: () => { navigator.clipboard.writeText(text); showToast("Copied!"); } },
         { label: "👍", fn: () => showToast("Thanks for the feedback!") },
@@ -320,19 +334,13 @@ async function addBotMessage(text, userMsg, animate) {
         btn.onclick = b.fn;
         actions.appendChild(btn);
     });
-
     wrapper.appendChild(div);
     wrapper.appendChild(actions);
     chatBox.appendChild(wrapper);
     chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-function showTyping(msg) {
-    const t = document.createElement("div");
-    t.className = "typing"; t.id = "typing"; t.textContent = msg;
-    document.getElementById("chatBox").appendChild(t);
-    document.getElementById("chatBox").scrollTop = document.getElementById("chatBox").scrollHeight;
-}
+function showTyping(msg) { const t = document.createElement("div"); t.className = "typing"; t.id = "typing"; t.textContent = msg; document.getElementById("chatBox").appendChild(t); document.getElementById("chatBox").scrollTop = document.getElementById("chatBox").scrollHeight; }
 function removeTyping() { const t = document.getElementById("typing"); if (t) t.remove(); }
 function showToast(msg) { const toast = document.getElementById("toast"); toast.textContent = msg; toast.style.display = "block"; setTimeout(() => toast.style.display = "none", 2000); }
 
@@ -390,6 +398,8 @@ document.addEventListener("keydown", e => {
 document.getElementById("userInput").addEventListener("keypress", e => { if (e.key === "Enter") sendMessage(); });
 
 async function init() {
+    checkAuth();
+    showUserInfo();
     await loadTopics();
     await loadSessions();
 }

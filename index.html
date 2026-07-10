@@ -13,6 +13,7 @@
 <div class="app">
     <div class="sidebar" id="sidebar">
         <div class="sidebar-title">NOVA AI</div>
+        <div class="user-info" id="userInfo"></div>
         <input class="search-box" id="searchBox" placeholder="Search chats..." oninput="searchSessions()" />
         <button class="new-chat-btn" onclick="newChat()">+ New Chat</button>
         <div class="pinned-label">PINNED</div>
@@ -20,6 +21,7 @@
         <div class="history-label">HISTORY</div>
         <div class="session-list" id="sessionList"></div>
         <div class="shortcuts">Ctrl+N New · Ctrl+K Search · Ctrl+D Theme</div>
+        <button class="logout-btn" onclick="logout()">Logout</button>
     </div>
     <div class="main">
         <div class="chat-header">
@@ -49,7 +51,7 @@
                 </div>
             </div>
         </div>
-        <button class="scroll-btn" id="scrollBtn" onclick="scrollToBottom()">↓</button>
+        <button class="scroll-btn" id="scrollBtn" onclick="scrollToBottom()">▼</button>
         <div class="chat-input">
             <input type="text" id="userInput" placeholder="Message NOVA AI... (Enter to send)" />
             <button class="btn" id="micBtn" onclick="startVoice()">Mic</button>

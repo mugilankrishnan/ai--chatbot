@@ -16,6 +16,8 @@ body { font-family: 'Segoe UI', sans-serif; background: var(--body-bg); display:
 .app { display: flex; width: 950px; height: 720px; border-radius: 20px; overflow: hidden; box-shadow: 0 0 40px rgba(100,100,255,0.3); border: 1px solid rgba(255,255,255,0.1); position: relative; }
 .sidebar { width: 250px; background: var(--sidebar); display: flex; flex-direction: column; padding: 16px; gap: 10px; transition: all 0.3s; }
 .sidebar-title { color: var(--purple); font-size: 20px; font-weight: bold; letter-spacing: 2px; padding: 8px 4px; }
+.user-info { color: var(--text); font-size: 13px; padding: 8px 4px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.user-info span { color: var(--purple); font-weight: bold; }
 .search-box { padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(108,99,255,0.3); background: var(--input-bg); color: var(--text); font-size: 13px; outline: none; width: 100%; }
 .search-box::placeholder { color: var(--muted); }
 .new-chat-btn { background: linear-gradient(135deg, var(--purple), var(--purple2)); color: white; border: none; padding: 12px; border-radius: 12px; cursor: pointer; font-size: 14px; font-weight: bold; text-align: left; }
@@ -34,6 +36,9 @@ body.light .dropdown { background: #fff; }
 .dropdown.show { display: flex; }
 .dropdown button { background: transparent; border: none; color: var(--text); padding: 7px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; text-align: left; }
 .dropdown button:hover { background: var(--purple); color: white; }
+.shortcuts { font-size: 11px; color: var(--muted); padding: 4px; text-align: center; }
+.logout-btn { background: transparent; border: 1px solid rgba(255,100,100,0.3); color: #ff6b6b; padding: 10px; border-radius: 12px; cursor: pointer; font-size: 13px; font-weight: bold; transition: all 0.2s; }
+.logout-btn:hover { background: rgba(255,100,100,0.1); }
 .main { flex: 1; display: flex; flex-direction: column; background: var(--bg); min-width: 0; position: relative; }
 .chat-header { background: linear-gradient(90deg, var(--purple), var(--purple2)); padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; color: white; font-size: 20px; font-weight: bold; letter-spacing: 2px; }
 .header-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -63,7 +68,6 @@ body.light .dropdown { background: #fff; }
 .bot-message code { background: rgba(108,99,255,0.2); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
 .bot-message pre { background: #0d0d1a; border-radius: 10px; padding: 14px; margin: 10px 0; overflow-x: auto; border: 1px solid rgba(108,99,255,0.3); position: relative; }
 .bot-message pre code { background: transparent; padding: 0; font-size: 13px; }
-.code-block-wrapper { position: relative; }
 .copy-code-btn { position: absolute; top: 8px; right: 8px; background: rgba(108,99,255,0.3); color: white; border: none; padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 11px; z-index: 10; }
 .copy-code-btn:hover { background: var(--purple); }
 .actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
@@ -78,8 +82,7 @@ body.light .dropdown { background: #fff; }
 .btn { padding: 10px 14px; border-radius: 25px; cursor: pointer; font-size: 13px; font-weight: bold; border: 1px solid rgba(108,99,255,0.3); background: var(--input-bg); color: var(--text); white-space: nowrap; transition: all 0.2s; }
 .btn.primary { background: linear-gradient(135deg, var(--purple), var(--purple2)); color: white; border: none; }
 .btn.listening { background: red; border-color: red; color: white; animation: pulse 1s infinite; }
-.shortcuts { font-size: 11px; color: var(--muted); padding: 4px; text-align: center; }
-.scroll-btn { position: absolute; bottom: 80px; right: 20px; background: var(--purple); color: white; border: none; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; font-size: 18px; display: none; z-index: 100; box-shadow: 0 4px 15px rgba(108,99,255,0.4); }
+.scroll-btn { position: fixed; bottom: 100px; right: 40px; background: var(--purple); color: white; border: none; width: 44px; height: 44px; border-radius: 50%; cursor: pointer; font-size: 20px; display: none; z-index: 999; box-shadow: 0 4px 15px rgba(108,99,255,0.5); line-height: 44px; text-align: center; }
 .scroll-btn:hover { opacity: 0.85; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,0,0,0.4); } 70% { box-shadow: 0 0 0 10px rgba(255,0,0,0); } 100% { box-shadow: 0 0 0 0 rgba(255,0,0,0); } }
 .toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%); background: var(--purple); color: white; padding: 10px 20px; border-radius: 20px; font-size: 13px; display: none; z-index: 999; }
