@@ -21,7 +21,11 @@
         <div class="history-label">HISTORY</div>
         <div class="session-list" id="sessionList"></div>
         <div class="shortcuts">Ctrl+N New · Ctrl+K Search · Ctrl+D Theme</div>
-        <button class="logout-btn" onclick="logout()">Logout</button>
+        <div class="sidebar-bottom">
+            <a href="/profile" class="sidebar-link">Profile</a>
+            <a href="/settings" class="sidebar-link">Settings</a>
+            <button class="logout-btn" onclick="logout()">Logout</button>
+        </div>
     </div>
     <div class="main">
         <div class="chat-header">
@@ -30,6 +34,12 @@
                 NOVA AI
             </div>
             <div class="header-controls">
+                <select class="model-select" id="modelSelect" onchange="changeModel(this.value)">
+                    <option value="llama-3.3-70b-versatile">Llama 3.3</option>
+                    <option value="qwen/qwen3.6-27b">Qwen 3.6</option>
+                    <option value="gemma2-9b-it">Gemma 2</option>
+                    <option value="mixtral-8x7b-32768">Mixtral</option>
+                </select>
                 <button class="export-btn" onclick="exportChat()">Export</button>
                 <select class="lang-select" id="langSelect">
                     <option value="en-US">English</option>
@@ -59,6 +69,7 @@
             <button class="btn" onclick="document.getElementById('fileInput').click()">File</button>
             <input type="file" id="imageInput" accept="image/*" onchange="uploadImage(event)" />
             <input type="file" id="fileInput" accept=".pdf,.txt,.csv" onchange="uploadFile(event)" />
+            <button class="btn stop-btn" id="stopBtn" onclick="stopGenerating()" style="display:none;">Stop</button>
             <button class="btn primary" onclick="sendMessage()">Send</button>
         </div>
     </div>

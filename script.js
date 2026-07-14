@@ -1,27 +1,32 @@
 let sessionId = "session_" + Date.now();
 let isLight = false, voiceMode = false;
 let sessionTopics = {}, pinnedSessions = [], allSessions = [];
+let currentModel = "llama-3.3-70b-versatile";
+let isGenerating = false;
+let abortController = null;
 
 function getToken() { return localStorage.getItem("nova_token"); }
 function getName() { return localStorage.getItem("nova_name"); }
-
-function authHeaders() {
-    return { "Content-Type": "application/json", "Authorization": "Bearer " + getToken() };
-}
-
-function checkAuth() {
-    if (!getToken()) window.location.href = "/login";
-}
-
-function logout() {
-    localStorage.removeItem("nova_token");
-    localStorage.removeItem("nova_name");
-    window.location.href = "/login";
-}
+function authHeaders() { return { "Content-Type": "application/json", "Authorization": "Bearer " + getToken() }; }
+function checkAuth() { if (!getToken()) window.location.href = "/login"; }
+function logout() { localStorage.removeItem("nova_token"); localStorage.removeItem("nova_name"); window.location.href = "/login"; }
 
 function showUserInfo() {
     const name = getName();
     if (name) document.getElementById("userInfo").innerHTML = `Hello, <span>${name}</span>`;
+}
+
+function changeModel(model) {
+    currentModel = model;
+    showToast("Model changed to " + document.getElementById("modelSelect").options[document.getElementById("modelSelect").selectedIndex].text);
+}
+
+function stopGenerating() {
+    if (abortController) { abortController.abort(); }
+    isGenerating = false;
+    document.getElementById("stopBtn").style.display = "none";
+    removeTyping();
+    showToast("Generation stopped");
 }
 
 function toggleSidebar() { document.getElementById("sidebar").classList.toggle("open"); }
@@ -118,7 +123,20 @@ async function deleteSession(id) {
     if (id === sessionId) newChat(); else loadSessions();
 }
 
-function shareSession(id) { navigator.clipboard.writeText(`NOVA AI Chat: ${sessionTopics[id] || "Chat"}`); showToast("Copied!"); }
+async function shareSession(id) {
+    const res = await fetch("/share-chat", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: id }) });
+    const data = await res.json();
+    if (res.ok) {
+        navigator.clipboard.writeText(data.share_url);
+        showToast("Share link copied to clipboard!");
+    } else { showToast("Failed to share"); }
+}
+
+function shareSession(id) {
+    fetch("/share-chat", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: id }) })
+        .then(r => r.json())
+        .then(data => { navigator.clipboard.writeText(data.share_url); showToast("Share link copied!"); });
+}
 
 async function renameSession(id) {
     const n = prompt("New name:", sessionTopics[id] || "New Chat");
@@ -157,7 +175,7 @@ async function generateTopic(message) {
 async function sendMessage() {
     const input = document.getElementById("userInput");
     const message = input.value.trim();
-    if (!message) return;
+    if (!message || isGenerating) return;
     const welcome = document.querySelector(".welcome");
     if (welcome) welcome.remove();
 
@@ -170,19 +188,36 @@ async function sendMessage() {
     addUserMessage(message);
     await loadSessions();
     input.value = "";
+    isGenerating = true;
+    document.getElementById("stopBtn").style.display = "block";
     showTyping("NOVA AI is typing...");
-    const res = await fetch("/chat", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, message }) });
-    const data = await res.json();
-    removeTyping();
-    await addBotMessage(data.reply, message, true);
-    if (voiceMode) speakText(data.reply);
-    voiceMode = false;
+
+    try {
+        abortController = new AbortController();
+        const res = await fetch("/chat", {
+            method: "POST",
+            headers: authHeaders(),
+            body: JSON.stringify({ session_id: sessionId, message, model: currentModel }),
+            signal: abortController.signal
+        });
+        const data = await res.json();
+        removeTyping();
+        await addBotMessage(data.reply, message, true);
+        if (voiceMode) speakText(data.reply);
+        voiceMode = false;
+    } catch (e) {
+        removeTyping();
+        if (e.name !== "AbortError") showToast("Error sending message");
+    }
+
+    isGenerating = false;
+    document.getElementById("stopBtn").style.display = "none";
     loadSessions();
 }
 
 async function retryMessage(userMsg) {
     showTyping("NOVA AI is retrying...");
-    const res = await fetch("/retry", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, message: userMsg }) });
+    const res = await fetch("/retry", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: sessionId, message: userMsg, model: currentModel }) });
     const data = await res.json();
     removeTyping();
     await addBotMessage(data.reply, userMsg, true);
@@ -285,11 +320,11 @@ async function addBotMessage(text, userMsg, animate) {
     wrapper.classList.add("message-wrapper", "bot-wrapper");
     const div = document.createElement("div");
     div.classList.add("message", "bot-message");
-
     if (animate) {
         const words = text.split(" ");
         let current = "";
         for (let i = 0; i < words.length; i++) {
+            if (!isGenerating && i > 0) break;
             current += (i === 0 ? "" : " ") + words[i];
             div.innerHTML = marked.parse(current);
             chatBox.scrollTop = chatBox.scrollHeight;
@@ -304,11 +339,7 @@ async function addBotMessage(text, userMsg, animate) {
         const copyBtn = document.createElement("button");
         copyBtn.className = "copy-code-btn";
         copyBtn.textContent = "Copy";
-        copyBtn.onclick = () => {
-            navigator.clipboard.writeText(pre.querySelector('code').textContent);
-            copyBtn.textContent = "Copied!";
-            setTimeout(() => copyBtn.textContent = "Copy", 2000);
-        };
+        copyBtn.onclick = () => { navigator.clipboard.writeText(pre.querySelector('code').textContent); copyBtn.textContent = "Copied!"; setTimeout(() => copyBtn.textContent = "Copy", 2000); };
         pre.appendChild(copyBtn);
     });
 
@@ -374,9 +405,8 @@ function scrollToBottom() {
 
 document.getElementById("chatBox").addEventListener("scroll", () => {
     const chatBox = document.getElementById("chatBox");
-    const scrollBtn = document.getElementById("scrollBtn");
     const distanceFromBottom = chatBox.scrollHeight - chatBox.scrollTop - chatBox.clientHeight;
-    scrollBtn.style.display = distanceFromBottom > 150 ? "block" : "none";
+    document.getElementById("scrollBtn").style.display = distanceFromBottom > 150 ? "block" : "none";
 });
 
 function exportChat() {
@@ -395,11 +425,14 @@ document.addEventListener("keydown", e => {
     if (e.ctrlKey && e.key === "d") { e.preventDefault(); toggleTheme(); }
 });
 
-document.getElementById("userInput").addEventListener("keypress", e => { if (e.key === "Enter") sendMessage(); });
+document.getElementById("userInput").addEventListener("keypress", e => { if (e.key === "Enter" && !isGenerating) sendMessage(); });
 
 async function init() {
     checkAuth();
     showUserInfo();
+    const u = await fetch("/api/me", { headers: authHeaders() }).then(r => r.json());
+    currentModel = u.default_model || "llama-3.3-70b-versatile";
+    document.getElementById("modelSelect").value = currentModel;
     await loadTopics();
     await loadSessions();
 }

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NOVA AI - Profile</title>
+    <style>
+        :root { --bg:#14161C; --surface:#1B1E26; --surface2:#20242E; --border:#2B2F39; --text:#F4F4F5; --muted:#9397A8; --purple:#7C5CFF; }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { background:var(--bg); font-family:'Segoe UI',sans-serif; color:var(--text); min-height:100vh; }
+        .header { background:var(--surface); border-bottom:1px solid var(--border); padding:16px 32px; display:flex; align-items:center; justify-content:space-between; }
+        .header h1 { color:var(--purple); font-size:22px; letter-spacing:2px; }
+        .header-links { display:flex; gap:16px; }
+        .header-links a { color:var(--muted); text-decoration:none; font-size:14px; }
+        .header-links a:hover { color:var(--purple); }
+        .container { max-width:600px; margin:60px auto; padding:0 20px; }
+        .profile-card { background:var(--surface); border:1px solid var(--border); border-radius:20px; padding:40px; text-align:center; }
+        .avatar { width:80px; height:80px; border-radius:50%; background:linear-gradient(135deg, var(--purple), #3f3d99); display:flex; align-items:center; justify-content:center; font-size:32px; font-weight:bold; color:white; margin:0 auto 20px; }
+        .profile-name { font-size:24px; font-weight:bold; margin-bottom:6px; }
+        .profile-email { color:var(--muted); font-size:14px; margin-bottom:6px; }
+        .profile-badge { display:inline-block; background:rgba(124,92,255,0.15); color:var(--purple); padding:4px 12px; border-radius:20px; font-size:12px; font-weight:600; margin-bottom:24px; }
+        .divider { height:1px; background:var(--border); margin:24px 0; }
+        .info-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; text-align:left; }
+        .info-item { background:var(--surface2); padding:16px; border-radius:12px; border:1px solid var(--border); }
+        .info-label { color:var(--muted); font-size:12px; margin-bottom:4px; }
+        .info-value { font-size:14px; font-weight:600; }
+        .action-btns { display:flex; gap:12px; margin-top:24px; justify-content:center; }
+        .btn { padding:11px 24px; border-radius:10px; border:none; cursor:pointer; font-size:14px; font-weight:600; transition:.2s; text-decoration:none; display:inline-block; }
+        .btn-primary { background:var(--purple); color:white; }
+        .btn-primary:hover { background:#6048d8; }
+        .btn-secondary { background:var(--surface2); color:var(--text); border:1px solid var(--border); }
+        .btn-secondary:hover { border-color:var(--purple); }
+        .btn-danger { background:rgba(255,107,107,0.15); color:#ff6b6b; border:1px solid rgba(255,107,107,0.3); }
+    </style>
+</head>
+<body>
+<div class="header">
+    <h1>NOVA AI</h1>
+    <div class="header-links">
+        <a href="/">Chat</a>
+        <a href="/settings">Settings</a>
+        <a href="#" onclick="logout()">Logout</a>
+    </div>
+</div>
+
+<div class="container">
+    <div class="profile-card">
+        <div class="avatar" id="avatarInitial">?</div>
+        <div class="profile-name" id="profileName">Loading...</div>
+        <div class="profile-email" id="profileEmail"></div>
+        <div class="profile-badge" id="profileBadge">Email</div>
+
+        <div class="divider"></div>
+
+        <div class="info-grid">
+            <div class="info-item">
+                <div class="info-label">Default AI Model</div>
+                <div class="info-value" id="profileModel">-</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Login Method</div>
+                <div class="info-value" id="profileProvider">-</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">System Prompt</div>
+                <div class="info-value" id="profilePrompt">None</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Account Status</div>
+                <div class="info-value" style="color:#51cf66">Active ✓</div>
+            </div>
+        </div>
+
+        <div class="action-btns">
+            <a href="/" class="btn btn-primary">Go to Chat</a>
+            <a href="/settings" class="btn btn-secondary">Settings</a>
+            <button class="btn btn-danger" onclick="logout()">Logout</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const token = localStorage.getItem("nova_token");
+if (!token) window.location.href = "/login";
+
+const modelNames = {
+    "llama-3.3-70b-versatile": "Llama 3.3 70B",
+    "qwen/qwen3.6-27b": "Qwen 3.6 27B",
+    "gemma2-9b-it": "Gemma 2 9B",
+    "mixtral-8x7b-32768": "Mixtral 8x7B"
+};
+
+async function loadProfile() {
+    const res = await fetch("/api/me", { headers: { "Authorization": "Bearer " + token } });
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json();
+    document.getElementById("avatarInitial").textContent = data.name?.[0]?.toUpperCase() || "?";
+    document.getElementById("profileName").textContent = data.name;
+    document.getElementById("profileEmail").textContent = data.email;
+    document.getElementById("profileBadge").textContent = data.auth_provider === "google" ? "Google Account" : "Email Account";
+    document.getElementById("profileModel").textContent = modelNames[data.default_model] || data.default_model;
+    document.getElementById("profileProvider").textContent = data.auth_provider === "google" ? "Google OAuth" : "Email & Password";
+    document.getElementById("profilePrompt").textContent = data.system_prompt ? data.system_prompt.substring(0, 30) + "..." : "None";
+}
+
+function logout() {
+    localStorage.removeItem("nova_token");
+    localStorage.removeItem("nova_name");
+    window.location.href = "/login";
+}
+
+loadProfile();
+</script>
+</body>
+</html>

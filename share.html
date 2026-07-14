@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NOVA AI - Shared Chat</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+    <style>
+        :root { --bg:#14161C; --surface:#1B1E26; --surface2:#20242E; --border:#2B2F39; --text:#F4F4F5; --muted:#9397A8; --purple:#7C5CFF; }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { background:var(--bg); font-family:'Segoe UI',sans-serif; color:var(--text); min-height:100vh; }
+        .header { background:var(--surface); border-bottom:1px solid var(--border); padding:16px 32px; display:flex; align-items:center; justify-content:space-between; }
+        .header h1 { color:var(--purple); font-size:22px; letter-spacing:2px; }
+        .header a { color:var(--muted); text-decoration:none; font-size:14px; }
+        .header a:hover { color:var(--purple); }
+        .container { max-width:800px; margin:40px auto; padding:0 20px; }
+        .badge { background:rgba(124,92,255,0.15); color:var(--purple); padding:6px 14px; border-radius:20px; font-size:12px; font-weight:600; display:inline-block; margin-bottom:20px; }
+        .chat-box { display:flex; flex-direction:column; gap:16px; }
+        .message-wrapper { display:flex; flex-direction:column; max-width:80%; }
+        .user-wrapper { align-self:flex-end; }
+        .bot-wrapper { align-self:flex-start; }
+        .message { padding:12px 18px; border-radius:18px; font-size:14px; line-height:1.6; word-wrap:break-word; }
+        .user-message { background:linear-gradient(135deg, var(--purple), #3f3d99); color:white; border-bottom-right-radius:4px; }
+        .bot-message { background:var(--surface2); color:var(--text); border-bottom-left-radius:4px; border:1px solid var(--border); }
+        .bot-message p { margin-bottom:8px; }
+        .bot-message code { background:rgba(124,92,255,0.2); padding:2px 6px; border-radius:4px; font-size:13px; }
+        .bot-message pre { background:#0d0d1a; border-radius:10px; padding:14px; margin:10px 0; overflow-x:auto; }
+        .role-label { font-size:11px; color:var(--muted); margin-bottom:4px; padding:0 4px; }
+        .user-wrapper .role-label { text-align:right; }
+        .try-btn { display:block; text-align:center; margin:40px auto; padding:14px 32px; background:var(--purple); color:white; border-radius:12px; text-decoration:none; font-weight:600; font-size:15px; max-width:200px; }
+        .try-btn:hover { background:#6048d8; }
+    </style>
+</head>
+<body>
+<div class="header">
+    <h1>NOVA AI</h1>
+    <a href="/login">Sign In</a>
+</div>
+
+<div class="container">
+    <div class="badge">Shared Conversation</div>
+    <div class="chat-box" id="chatBox">
+        <p style="color:var(--muted)">Loading conversation...</p>
+    </div>
+    <a href="/login" class="try-btn">Try NOVA AI</a>
+</div>
+
+<script>
+const shareId = window.location.pathname.split("/").pop();
+
+async function loadSharedChat() {
+    const res = await fetch(`/api/share/${shareId}`);
+    if (!res.ok) {
+        document.getElementById("chatBox").innerHTML = '<p style="color:#ff6b6b">Shared chat not found.</p>';
+        return;
+    }
+    const data = await res.json();
+    const chatBox = document.getElementById("chatBox");
+    chatBox.innerHTML = "";
+    data.history.forEach(m => {
+        const wrapper = document.createElement("div");
+        wrapper.classList.add("message-wrapper", m.role === "user" ? "user-wrapper" : "bot-wrapper");
+        const label = document.createElement("div");
+        label.className = "role-label";
+        label.textContent = m.role === "user" ? "You" : "NOVA AI";
+        const div = document.createElement("div");
+        div.classList.add("message", m.role === "user" ? "user-message" : "bot-message");
+        if (m.role === "assistant") div.innerHTML = marked.parse(m.content);
+        else div.textContent = m.content;
+        wrapper.appendChild(label);
+        wrapper.appendChild(div);
+        chatBox.appendChild(wrapper);
+    });
+}
+
+loadSharedChat();
+</script>
+</body>
+</html>

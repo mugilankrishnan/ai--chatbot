@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NOVA AI - Settings</title>
+    <style>
+        :root { --bg:#14161C; --surface:#1B1E26; --surface2:#20242E; --border:#2B2F39; --text:#F4F4F5; --muted:#9397A8; --purple:#7C5CFF; --purpleDark:#6048d8; --error:#ff6b6b; --success:#51cf66; }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { background:var(--bg); font-family:'Segoe UI',sans-serif; color:var(--text); min-height:100vh; }
+        .header { background:var(--surface); border-bottom:1px solid var(--border); padding:16px 32px; display:flex; align-items:center; justify-content:space-between; }
+        .header h1 { color:var(--purple); font-size:22px; letter-spacing:2px; }
+        .header-links { display:flex; gap:16px; align-items:center; }
+        .header-links a { color:var(--muted); text-decoration:none; font-size:14px; }
+        .header-links a:hover { color:var(--purple); }
+        .container { max-width:700px; margin:40px auto; padding:0 20px; display:flex; flex-direction:column; gap:24px; }
+        .section { background:var(--surface); border:1px solid var(--border); border-radius:16px; overflow:hidden; }
+        .section-header { padding:20px 24px; border-bottom:1px solid var(--border); }
+        .section-header h2 { font-size:16px; font-weight:600; }
+        .section-header p { color:var(--muted); font-size:13px; margin-top:4px; }
+        .section-body { padding:24px; display:flex; flex-direction:column; gap:16px; }
+        label { font-size:13px; color:var(--muted); display:block; margin-bottom:6px; }
+        input, select, textarea { width:100%; padding:12px 14px; background:var(--surface2); border:1px solid var(--border); border-radius:10px; color:var(--text); font-size:14px; outline:none; transition:.2s; font-family:inherit; }
+        input:focus, select:focus, textarea:focus { border-color:var(--purple); }
+        textarea { resize:vertical; min-height:80px; }
+        select option { background:var(--surface2); }
+        .btn { padding:11px 20px; border-radius:10px; border:none; cursor:pointer; font-size:14px; font-weight:600; transition:.2s; }
+        .btn-primary { background:var(--purple); color:white; }
+        .btn-primary:hover { background:var(--purpleDark); }
+        .btn-danger { background:rgba(255,107,107,0.15); color:var(--error); border:1px solid rgba(255,107,107,0.3); }
+        .btn-danger:hover { background:rgba(255,107,107,0.25); }
+        .msg { padding:10px 14px; border-radius:8px; font-size:13px; display:none; }
+        .msg.success { background:rgba(81,207,102,0.15); color:var(--success); border:1px solid rgba(81,207,102,0.3); display:block; }
+        .msg.error { background:rgba(255,107,107,0.15); color:var(--error); border:1px solid rgba(255,107,107,0.3); display:block; }
+        .row { display:flex; gap:12px; align-items:flex-end; }
+        .row .field { flex:1; }
+        .model-card { display:flex; align-items:center; gap:12px; padding:14px; background:var(--surface2); border:1px solid var(--border); border-radius:10px; cursor:pointer; transition:.2s; }
+        .model-card:hover, .model-card.selected { border-color:var(--purple); background:rgba(124,92,255,0.08); }
+        .model-card input[type=radio] { accent-color:var(--purple); width:16px; height:16px; }
+        .model-info h4 { font-size:14px; }
+        .model-info p { font-size:12px; color:var(--muted); margin-top:2px; }
+        .danger-zone { border-color:rgba(255,107,107,0.3); }
+        .danger-zone .section-header { border-bottom-color:rgba(255,107,107,0.3); }
+        .danger-zone .section-header h2 { color:var(--error); }
+    </style>
+</head>
+<body>
+<div class="header">
+    <h1>NOVA AI</h1>
+    <div class="header-links">
+        <a href="/">Chat</a>
+        <a href="/profile">Profile</a>
+        <a href="#" onclick="logout()">Logout</a>
+    </div>
+</div>
+
+<div class="container">
+
+    <!-- AI Model -->
+    <div class="section">
+        <div class="section-header">
+            <h2>AI Model</h2>
+            <p>Choose your default AI model for conversations</p>
+        </div>
+        <div class="section-body">
+            <div id="modelList" style="display:flex;flex-direction:column;gap:10px;"></div>
+            <div id="modelMsg" class="msg"></div>
+            <button class="btn btn-primary" onclick="saveModel()">Save Model</button>
+        </div>
+    </div>
+
+    <!-- System Prompt -->
+    <div class="section">
+        <div class="section-header">
+            <h2>System Prompt</h2>
+            <p>Give NOVA AI a custom personality or instructions</p>
+        </div>
+        <div class="section-body">
+            <div>
+                <label>System Prompt</label>
+                <textarea id="systemPrompt" placeholder="e.g. You are a helpful coding assistant who answers only Python questions."></textarea>
+            </div>
+            <div id="promptMsg" class="msg"></div>
+            <button class="btn btn-primary" onclick="savePrompt()">Save Prompt</button>
+        </div>
+    </div>
+
+    <!-- Change Name -->
+    <div class="section">
+        <div class="section-header">
+            <h2>Display Name</h2>
+            <p>Update your display name</p>
+        </div>
+        <div class="section-body">
+            <div>
+                <label>Full Name</label>
+                <input type="text" id="newName" placeholder="Enter new name" />
+            </div>
+            <div id="nameMsg" class="msg"></div>
+            <button class="btn btn-primary" onclick="saveName()">Save Name</button>
+        </div>
+    </div>
+
+    <!-- Change Password -->
+    <div class="section">
+        <div class="section-header">
+            <h2>Change Password</h2>
+            <p>Update your account password</p>
+        </div>
+        <div class="section-body">
+            <div>
+                <label>Current Password</label>
+                <input type="password" id="currentPass" placeholder="Enter current password" />
+            </div>
+            <div>
+                <label>New Password</label>
+                <input type="password" id="newPass" placeholder="Enter new password" />
+            </div>
+            <div>
+                <label>Confirm New Password</label>
+                <input type="password" id="confirmPass" placeholder="Repeat new password" />
+            </div>
+            <div id="passMsg" class="msg"></div>
+            <button class="btn btn-primary" onclick="savePassword()">Update Password</button>
+        </div>
+    </div>
+
+    <!-- Danger Zone -->
+    <div class="section danger-zone">
+        <div class="section-header">
+            <h2>Danger Zone</h2>
+        </div>
+        <div class="section-body">
+            <div id="dangerMsg" class="msg"></div>
+            <button class="btn btn-danger" onclick="clearAllHistory()">Clear All Chat History</button>
+        </div>
+    </div>
+
+</div>
+
+<script>
+const token = localStorage.getItem("nova_token");
+if (!token) window.location.href = "/login";
+
+const models = {
+    "llama-3.3-70b-versatile": { name: "Llama 3.3 70B", desc: "Fast and capable — great for general chat" },
+    "qwen/qwen3.6-27b": { name: "Qwen 3.6 27B", desc: "Strong reasoning and multilingual support" },
+    "gemma2-9b-it": { name: "Gemma 2 9B", desc: "Lightweight and fast responses" },
+    "mixtral-8x7b-32768": { name: "Mixtral 8x7B", desc: "Great for long context and complex tasks" }
+};
+
+let selectedModel = "llama-3.3-70b-versatile";
+
+async function loadSettings() {
+    const res = await fetch("/api/me", { headers: { "Authorization": "Bearer " + token } });
+    if (res.status === 401) { logout(); return; }
+    const data = await res.json();
+    selectedModel = data.default_model || "llama-3.3-70b-versatile";
+    document.getElementById("newName").value = data.name || "";
+    document.getElementById("systemPrompt").value = data.system_prompt || "";
+    renderModels();
+}
+
+function renderModels() {
+    const list = document.getElementById("modelList");
+    list.innerHTML = "";
+    Object.entries(models).forEach(([key, val]) => {
+        const card = document.createElement("label");
+        card.className = "model-card" + (selectedModel === key ? " selected" : "");
+        card.innerHTML = `
+            <input type="radio" name="model" value="${key}" ${selectedModel === key ? "checked" : ""} onchange="selectedModel='${key}'; document.querySelectorAll('.model-card').forEach(c=>c.classList.remove('selected')); this.closest('.model-card').classList.add('selected')">
+            <div class="model-info">
+                <h4>${val.name}</h4>
+                <p>${val.desc}</p>
+            </div>`;
+        list.appendChild(card);
+    });
+}
+
+async function saveModel() {
+    const res = await fetch("/api/me/model", { method: "PUT", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token }, body: JSON.stringify({ model: selectedModel }) });
+    const data = await res.json();
+    showMsg("modelMsg", res.ok ? data.message : data.detail, res.ok ? "success" : "error");
+}
+
+async function savePrompt() {
+    const system_prompt = document.getElementById("systemPrompt").value;
+    const res = await fetch("/api/me/system-prompt", { method: "PUT", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token }, body: JSON.stringify({ system_prompt }) });
+    const data = await res.json();
+    showMsg("promptMsg", res.ok ? data.message : data.detail, res.ok ? "success" : "error");
+}
+
+async function saveName() {
+    const name = document.getElementById("newName").value.trim();
+    if (!name) { showMsg("nameMsg", "Please enter a name", "error"); return; }
+    const res = await fetch("/api/me/name", { method: "PUT", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token }, body: JSON.stringify({ name }) });
+    const data = await res.json();
+    if (res.ok) { localStorage.setItem("nova_name", name); }
+    showMsg("nameMsg", res.ok ? data.message : data.detail, res.ok ? "success" : "error");
+}
+
+async function savePassword() {
+    const current_password = document.getElementById("currentPass").value;
+    const new_password = document.getElementById("newPass").value;
+    const confirm = document.getElementById("confirmPass").value;
+    if (!current_password || !new_password) { showMsg("passMsg", "Please fill all fields", "error"); return; }
+    if (new_password !== confirm) { showMsg("passMsg", "Passwords do not match", "error"); return; }
+    if (new_password.length < 6) { showMsg("passMsg", "Password must be at least 6 characters", "error"); return; }
+    const res = await fetch("/api/me/password", { method: "PUT", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token }, body: JSON.stringify({ current_password, new_password }) });
+    const data = await res.json();
+    if (res.ok) { document.getElementById("currentPass").value = ""; document.getElementById("newPass").value = ""; document.getElementById("confirmPass").value = ""; }
+    showMsg("passMsg", res.ok ? data.message : data.detail, res.ok ? "success" : "error");
+}
+
+async function clearAllHistory() {
+    if (!confirm("Are you sure? This will delete ALL your chat history permanently.")) return;
+    const res = await fetch("/api/me/history", { method: "DELETE", headers: { "Authorization": "Bearer " + token } });
+    const data = await res.json();
+    showMsg("dangerMsg", res.ok ? data.message : data.detail, res.ok ? "success" : "error");
+}
+
+function showMsg(id, msg, type) {
+    const el = document.getElementById(id);
+    el.textContent = msg;
+    el.className = "msg " + type;
+    setTimeout(() => el.className = "msg", 3000);
+}
+
+function logout() {
+    localStorage.removeItem("nova_token");
+    localStorage.removeItem("nova_name");
+    window.location.href = "/login";
+}
+
+loadSettings();
+</script>
+</body>
+</html>
