@@ -46,6 +46,12 @@ def init_db():
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pinned_chats (
+            session_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS shared_chats (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             share_id TEXT UNIQUE NOT NULL,
@@ -154,19 +160,28 @@ def save_message(session_id, user_id, role, content):
     conn.commit()
     conn.close()
 
+def _iso(ts):
+    """SQLite stores CURRENT_TIMESTAMP as 'YYYY-MM-DD HH:MM:SS' (UTC, no timezone marker).
+    Convert to a real ISO-8601 UTC string so `new Date(...)` in the browser parses it
+    reliably instead of guessing local timezone."""
+    if not ts:
+        return None
+    return ts.replace(" ", "T") + "Z"
+
 def get_history(session_id):
     conn = get_conn()
     cursor = conn.cursor()
-    cursor.execute("SELECT role, content FROM messages WHERE session_id = ?", (session_id,))
+    cursor.execute("SELECT role, content, created_at FROM messages WHERE session_id = ?", (session_id,))
     rows = cursor.fetchall()
     conn.close()
-    return [{"role": row["role"], "content": row["content"]} for row in rows]
+    return [{"role": row["role"], "content": row["content"], "created_at": _iso(row["created_at"])} for row in rows]
 
 def delete_history(session_id):
     conn = get_conn()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
     cursor.execute("DELETE FROM topics WHERE session_id = ?", (session_id,))
+    cursor.execute("DELETE FROM pinned_chats WHERE session_id = ?", (session_id,))
     conn.commit()
     conn.close()
 
@@ -175,6 +190,7 @@ def delete_all_history(user_id):
     cursor = conn.cursor()
     cursor.execute("DELETE FROM messages WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM topics WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM pinned_chats WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
 
@@ -211,6 +227,31 @@ def get_all_topics(user_id):
     conn.close()
     return {row["session_id"]: row["topic"] for row in rows}
 
+def get_pinned_sessions(user_id):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT session_id FROM pinned_chats WHERE user_id = ?", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [row["session_id"] for row in rows]
+
+def toggle_pin(session_id, user_id):
+    """Returns True if the session is now pinned, False if it was just unpinned."""
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM pinned_chats WHERE session_id = ? AND user_id = ?", (session_id, user_id))
+    exists = cursor.fetchone()
+    if exists:
+        cursor.execute("DELETE FROM pinned_chats WHERE session_id = ? AND user_id = ?", (session_id, user_id))
+        conn.commit()
+        conn.close()
+        return False
+    else:
+        cursor.execute("INSERT INTO pinned_chats (session_id, user_id) VALUES (?, ?)", (session_id, user_id))
+        conn.commit()
+        conn.close()
+        return True
+
 def save_shared_chat(share_id, session_id, user_id):
     conn = get_conn()
     cursor = conn.cursor()
@@ -230,3 +271,53 @@ def get_shared_chat(share_id):
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+def verify_user_otp(email, otp):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users SET is_verified = 1, otp = NULL, otp_expires_at = NULL
+        WHERE email = ? AND otp = ?
+    """, (email, otp))
+    updated = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return updated > 0
+
+def update_otp(email, otp, expires_at):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET otp = ?, otp_expires_at = ? WHERE email = ?", (otp, expires_at, email))
+    conn.commit()
+    conn.close()
+
+def save_reset_otp(email, otp, expires_at):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users SET reset_otp = ?, reset_otp_expires_at = ?
+        WHERE email = ? AND is_verified = 1
+    """, (otp, expires_at, email))
+    updated = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return updated > 0
+
+def reset_password(email, otp, new_password_hash):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE users SET password = ?, reset_otp = NULL, reset_otp_expires_at = NULL
+        WHERE email = ? AND reset_otp = ?
+    """, (new_password_hash, email, otp))
+    updated = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return updated > 0
+
+def delete_unverified_user(email):
+    conn = get_conn()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM users WHERE email = ? AND is_verified = 0", (email,))
+    conn.commit()
+    conn.close()

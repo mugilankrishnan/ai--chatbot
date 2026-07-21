@@ -36,6 +36,7 @@ async function loadTopics() {
     if (res.status === 401) { logout(); return; }
     const data = await res.json();
     sessionTopics = data.topics;
+    pinnedSessions = data.pinned || [];
 }
 
 async function loadSessions() {
@@ -110,8 +111,8 @@ async function loadSession(id) {
         const m = data.history[i];
         if (m.role === "assistant") {
             const lastUser = data.history.slice(0, i).reverse().find(x => x.role === "user");
-            await addBotMessage(m.content, lastUser ? lastUser.content : "", false);
-        } else { addUserMessage(m.content); }
+            await addBotMessage(m.content, lastUser ? lastUser.content : "", false, m.created_at);
+        } else { addUserMessage(m.content, m.created_at); }
     }
     renderSessions(allSessions);
 }
@@ -132,12 +133,6 @@ async function shareSession(id) {
     } else { showToast("Failed to share"); }
 }
 
-function shareSession(id) {
-    fetch("/share-chat", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: id }) })
-        .then(r => r.json())
-        .then(data => { navigator.clipboard.writeText(data.share_url); showToast("Share link copied!"); });
-}
-
 async function renameSession(id) {
     const n = prompt("New name:", sessionTopics[id] || "New Chat");
     if (n) {
@@ -147,7 +142,22 @@ async function renameSession(id) {
     }
 }
 
-function togglePin(id) { pinnedSessions = pinnedSessions.includes(id) ? pinnedSessions.filter(p => p !== id) : [...pinnedSessions, id]; renderSessions(allSessions); }
+async function togglePin(id) {
+    // Optimistic UI update, corrected if the server disagrees (e.g. race with another tab).
+    const wasPinned = pinnedSessions.includes(id);
+    pinnedSessions = wasPinned ? pinnedSessions.filter(p => p !== id) : [...pinnedSessions, id];
+    renderSessions(allSessions);
+    try {
+        const res = await fetch("/toggle-pin", { method: "POST", headers: authHeaders(), body: JSON.stringify({ session_id: id }) });
+        const data = await res.json();
+        pinnedSessions = data.pinned ? [...new Set([...pinnedSessions, id])] : pinnedSessions.filter(p => p !== id);
+    } catch (e) {
+        // Roll back on failure
+        pinnedSessions = wasPinned ? [...pinnedSessions, id] : pinnedSessions.filter(p => p !== id);
+        showToast("Couldn't update pin, try again");
+    }
+    renderSessions(allSessions);
+}
 function newChat() { window.speechSynthesis.cancel(); sessionId = "session_" + Date.now(); showWelcome(); renderSessions(allSessions); }
 
 function showWelcome() {
@@ -162,6 +172,17 @@ function showWelcome() {
                 <button class="suggestion-btn" onclick="suggest('What are the differences between')">🔍 Compare two things</button>
             </div>
         </div>`;
+}
+
+// Renders a small timestamp under a message bubble. Pass an ISO string (from
+// history/created_at) to show when a message was actually sent; omit it to
+// stamp with the current time (for messages just sent/received live).
+function makeTimeEl(timestamp) {
+    const t = document.createElement("div");
+    t.className = "msg-time";
+    const d = timestamp ? new Date(timestamp) : new Date();
+    t.textContent = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return t;
 }
 
 function suggest(text) { document.getElementById("userInput").value = text; document.getElementById("userInput").focus(); }
@@ -200,10 +221,9 @@ async function sendMessage() {
             body: JSON.stringify({ session_id: sessionId, message, model: currentModel }),
             signal: abortController.signal
         });
-        const data = await res.json();
         removeTyping();
-        await addBotMessage(data.reply, message, true);
-        if (voiceMode) speakText(data.reply);
+        const fullReply = await streamBotMessage(res.body, message);
+        if (voiceMode && fullReply) speakText(fullReply);
         voiceMode = false;
     } catch (e) {
         removeTyping();
@@ -234,6 +254,30 @@ async function editMessage(wrapper, oldText) {
     sendMessage();
 }
 
+// Downscales large photos to a max 1280px edge before upload. Phone photos are
+// often 3000px+ / several MB - shrinking them client-side cuts upload time and
+// gives the server less work to resize too. Falls back to the original file if
+// canvas resizing fails for any reason.
+function resizeImageFile(file, maxDim = 1280, quality = 0.85) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+            let { width, height } = img;
+            if (width > maxDim || height > maxDim) {
+                if (width > height) { height = Math.round(height * maxDim / width); width = maxDim; }
+                else { width = Math.round(width * maxDim / height); height = maxDim; }
+            }
+            const canvas = document.createElement("canvas");
+            canvas.width = width; canvas.height = height;
+            canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+            canvas.toBlob(blob => { URL.revokeObjectURL(url); resolve(blob || file); }, "image/jpeg", quality);
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+        img.src = url;
+    });
+}
+
 async function uploadImage(event) {
     const file = event.target.files[0];
     if (!file) return;
@@ -247,16 +291,32 @@ async function uploadImage(event) {
         img.src = e.target.result;
         img.className = "uploaded-image";
         wrapper.appendChild(img);
+        wrapper.appendChild(makeTimeEl());
         document.getElementById("chatBox").appendChild(wrapper);
     };
     reader.readAsDataURL(file);
+
+    isGenerating = true;
+    document.getElementById("stopBtn").style.display = "block";
     showTyping("NOVA AI is analyzing image...");
+
+    const resized = await resizeImageFile(file);
     const formData = new FormData();
-    formData.append("file", file);
-    const res = await fetch("/upload-image", { method: "POST", headers: { "Authorization": "Bearer " + getToken() }, body: formData });
-    const data = await res.json();
-    removeTyping();
-    await addBotMessage(data.reply, "image", true);
+    formData.append("file", resized, file.name);
+    formData.append("session_id", sessionId);
+
+    try {
+        abortController = new AbortController();
+        const res = await fetch("/upload-image", { method: "POST", headers: { "Authorization": "Bearer " + getToken() }, body: formData, signal: abortController.signal });
+        removeTyping();
+        await streamBotMessage(res.body, "image");
+    } catch (e) {
+        removeTyping();
+        if (e.name !== "AbortError") showToast("Error analyzing image");
+    }
+
+    isGenerating = false;
+    document.getElementById("stopBtn").style.display = "none";
     if (!sessionTopics[sessionId]) {
         const topic = "Image: " + file.name;
         sessionTopics[sessionId] = topic;
@@ -275,6 +335,7 @@ async function uploadFile(event) {
     showTyping("NOVA AI is reading file...");
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("session_id", sessionId);
     const res = await fetch("/upload-file", { method: "POST", headers: { "Authorization": "Bearer " + getToken() }, body: formData });
     const data = await res.json();
     removeTyping();
@@ -288,50 +349,83 @@ async function uploadFile(event) {
     event.target.value = "";
 }
 
-function addUserMessage(text) {
+function addUserMessage(text, timestamp) {
     const chatBox = document.getElementById("chatBox");
     const wrapper = document.createElement("div");
     wrapper.classList.add("message-wrapper", "user-wrapper");
     const div = document.createElement("div");
     div.classList.add("message", "user-message");
-    div.textContent = text;
-    const actions = document.createElement("div");
-    actions.className = "actions";
-    actions.style.justifyContent = "flex-end";
-    [
-        { label: "✏️ Edit", fn: () => editMessage(wrapper, text) },
-        { label: "Copy", fn: () => { navigator.clipboard.writeText(text); showToast("Copied!"); } }
-    ].forEach(b => {
-        const btn = document.createElement("button");
-        btn.className = "action-btn";
-        btn.textContent = b.label;
-        btn.onclick = b.fn;
-        actions.appendChild(btn);
-    });
-    wrapper.appendChild(div);
-    wrapper.appendChild(actions);
+
+    if (text.startsWith("[[image]]")) {
+        const img = document.createElement("img");
+        img.src = text.slice("[[image]]".length);
+        img.className = "uploaded-image";
+        div.appendChild(img);
+    } else {
+        div.textContent = text;
+    }
+    if (!text.startsWith("[[image]]")) {
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        actions.style.justifyContent = "flex-end";
+        [
+            { label: "✏️ Edit", fn: () => editMessage(wrapper, text) },
+            { label: "Copy", fn: () => { navigator.clipboard.writeText(text); showToast("Copied!"); } }
+        ].forEach(b => {
+            const btn = document.createElement("button");
+            btn.className = "action-btn";
+            btn.textContent = b.label;
+            btn.onclick = b.fn;
+            actions.appendChild(btn);
+        });
+        wrapper.appendChild(div);
+        wrapper.appendChild(makeTimeEl(timestamp));
+        wrapper.appendChild(actions);
+    } else {
+        wrapper.appendChild(div);
+        wrapper.appendChild(makeTimeEl(timestamp));
+    }
     chatBox.appendChild(wrapper);
     chatBox.scrollTop = chatBox.scrollHeight;
 }
 
-async function addBotMessage(text, userMsg, animate) {
+// Reads the real streaming /chat response chunk-by-chunk, so hitting Stop
+// (which aborts the fetch) genuinely cuts generation off instead of just
+// interrupting a fake "typing" replay of an already-fully-received reply.
+async function streamBotMessage(bodyStream, userMsg) {
     const chatBox = document.getElementById("chatBox");
     const wrapper = document.createElement("div");
     wrapper.classList.add("message-wrapper", "bot-wrapper");
     const div = document.createElement("div");
     div.classList.add("message", "bot-message");
-    if (animate) {
-        const words = text.split(" ");
-        let current = "";
-        for (let i = 0; i < words.length; i++) {
-            if (!isGenerating && i > 0) break;
-            current += (i === 0 ? "" : " ") + words[i];
-            div.innerHTML = marked.parse(current);
-            chatBox.scrollTop = chatBox.scrollHeight;
-            await new Promise(r => setTimeout(r, 30));
-        }
-    } else { div.innerHTML = marked.parse(text); }
+    wrapper.appendChild(div);
+    chatBox.appendChild(wrapper);
+    chatBox.scrollTop = chatBox.scrollHeight;
 
+    const reader = bodyStream.getReader();
+    const decoder = new TextDecoder();
+    let fullText = "";
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done || !isGenerating) break;
+            fullText += decoder.decode(value, { stream: true });
+            div.innerHTML = marked.parse(fullText);
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+    } catch (e) {
+        if (e.name !== "AbortError") throw e;
+    } finally {
+        try { reader.cancel(); } catch (_) {}
+    }
+
+    wrapper.appendChild(makeTimeEl());
+    attachBotActions(wrapper, div, fullText, userMsg);
+    return fullText;
+}
+
+function attachBotActions(wrapper, div, text, userMsg) {
+    const chatBox = document.getElementById("chatBox");
     div.querySelectorAll('pre').forEach(pre => {
         pre.style.position = "relative";
         const code = pre.querySelector('code');
@@ -365,10 +459,34 @@ async function addBotMessage(text, userMsg, animate) {
         btn.onclick = b.fn;
         actions.appendChild(btn);
     });
-    wrapper.appendChild(div);
     wrapper.appendChild(actions);
-    chatBox.appendChild(wrapper);
     chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+// Still used for /retry and /upload-file responses, which return a plain
+// {reply} JSON blob rather than a stream, plus for replaying loaded history.
+async function addBotMessage(text, userMsg, animate, timestamp) {
+    const chatBox = document.getElementById("chatBox");
+    const wrapper = document.createElement("div");
+    wrapper.classList.add("message-wrapper", "bot-wrapper");
+    const div = document.createElement("div");
+    div.classList.add("message", "bot-message");
+    if (animate) {
+        const words = text.split(" ");
+        let current = "";
+        for (let i = 0; i < words.length; i++) {
+            if (!isGenerating && i > 0) break;
+            current += (i === 0 ? "" : " ") + words[i];
+            div.innerHTML = marked.parse(current);
+            chatBox.scrollTop = chatBox.scrollHeight;
+            await new Promise(r => setTimeout(r, 30));
+        }
+    } else { div.innerHTML = marked.parse(text); }
+
+    wrapper.appendChild(div);
+    wrapper.appendChild(makeTimeEl(timestamp));
+    chatBox.appendChild(wrapper);
+    attachBotActions(wrapper, div, text, userMsg);
 }
 
 function showTyping(msg) { const t = document.createElement("div"); t.className = "typing"; t.id = "typing"; t.textContent = msg; document.getElementById("chatBox").appendChild(t); document.getElementById("chatBox").scrollTop = document.getElementById("chatBox").scrollHeight; }

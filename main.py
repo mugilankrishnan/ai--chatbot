@@ -1,17 +1,20 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
-from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from groq import Groq
-import os, base64, bcrypt, jwt, uuid, httpx
+import os, base64, bcrypt, jwt, uuid, httpx, random
+from datetime import datetime, timedelta
 from db import (init_db, save_message, get_history, delete_history,
     get_all_sessions, delete_messages_after, save_topic, get_all_topics,
     create_user, get_user_by_email, get_user_by_id, get_user_by_google_id,
     create_google_user, link_google_id_to_user, update_user_name,
     update_user_password, update_default_model, update_system_prompt,
-    delete_all_history, save_shared_chat, get_shared_chat)
+    delete_all_history, save_shared_chat, get_shared_chat,
+    verify_user_otp, update_otp, delete_unverified_user,
+    get_pinned_sessions, toggle_pin)
 
 load_dotenv()
 app = FastAPI()
@@ -22,7 +25,38 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY", "nova_ai_secret_key_2026")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 APP_BASE_URL = os.getenv("APP_BASE_URL", "http://127.0.0.1:8000")
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+FROM_EMAIL = os.getenv("FROM_EMAIL", "onboarding@resend.dev")
 security = HTTPBearer()
+
+def generate_otp():
+    return str(random.randint(100000, 999999))
+
+async def send_otp_email(to_email: str, name: str, otp: str):
+    if not RESEND_API_KEY:
+        print(f"[DEV] RESEND_API_KEY missing. OTP for {to_email}: {otp}")
+        return
+    async with httpx.AsyncClient() as c:
+        res = await c.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
+            json={
+                "from": f"NOVA AI <{FROM_EMAIL}>",
+                "to": [to_email],
+                "subject": "Verify your NOVA AI account",
+                "html": f"""
+                    <div style="font-family:sans-serif;background:#14161C;color:#F4F4F5;padding:32px;border-radius:12px;">
+                        <h2 style="color:#7C5CFF;">NOVA AI</h2>
+                        <p>Hi {name},</p>
+                        <p>Your verification code is:</p>
+                        <div style="font-size:32px;font-weight:bold;letter-spacing:6px;color:#7C5CFF;margin:16px 0;">{otp}</div>
+                        <p style="color:#9397A8;font-size:13px;">This code expires in 10 minutes.</p>
+                    </div>
+                """
+            }
+        )
+        if res.status_code >= 300:
+            print("Resend error:", res.status_code, res.text)
 
 AVAILABLE_MODELS = {
     "llama-3.3-70b-versatile": "Llama 3.3 70B",
@@ -52,6 +86,13 @@ class LoginRequest(BaseModel):
     email: str
     password: str
 
+class VerifyOtpRequest(BaseModel):
+    email: str
+    otp: str
+
+class ResendOtpRequest(BaseModel):
+    email: str
+
 class UpdateNameRequest(BaseModel):
     name: str
 
@@ -66,6 +107,9 @@ class UpdateSystemPromptRequest(BaseModel):
     system_prompt: str
 
 class ShareChatRequest(BaseModel):
+    session_id: str
+
+class PinRequest(BaseModel):
     session_id: str
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -104,21 +148,61 @@ def style(): return FileResponse("style.css", media_type="text/css")
 def script(): return FileResponse("script.js", media_type="application/javascript")
 
 @app.post("/signup")
-def signup(request: SignupRequest):
+async def signup(request: SignupRequest):
     if len(request.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    existing = get_user_by_email(request.email)
+    if existing and existing.get("is_verified"):
+        raise HTTPException(status_code=400, detail="Email already exists")
+    if existing and not existing.get("is_verified"):
+        delete_unverified_user(request.email)  # let them re-signup and get a fresh OTP
+
     hashed = bcrypt.hashpw(request.password.encode(), bcrypt.gensalt()).decode()
-    user_id = create_user(request.name, request.email, hashed)
+    otp = generate_otp()
+    expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+    user_id = create_user(request.name, request.email, hashed, otp, expires_at)
     if not user_id:
         raise HTTPException(status_code=400, detail="Email already exists")
-    token = jwt.encode({"id": user_id, "name": request.name, "email": request.email}, SECRET_KEY, algorithm="HS256")
-    return {"token": token, "name": request.name}
+
+    await send_otp_email(request.email, request.name, otp)
+    return {"message": "OTP sent to your email", "email": request.email}
+
+@app.post("/verify-otp")
+def verify_otp(request: VerifyOtpRequest):
+    user = get_user_by_email(request.email)
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found for this email")
+    if user.get("is_verified"):
+        raise HTTPException(status_code=400, detail="Account already verified")
+    if user.get("otp_expires_at") and datetime.utcnow() > datetime.fromisoformat(user["otp_expires_at"]):
+        raise HTTPException(status_code=400, detail="OTP expired. Please request a new one.")
+    if not verify_user_otp(request.email, request.otp):
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+    token = jwt.encode({"id": user["id"], "name": user["name"], "email": user["email"]}, SECRET_KEY, algorithm="HS256")
+    return {"token": token, "name": user["name"]}
+
+@app.post("/resend-otp")
+async def resend_otp(request: ResendOtpRequest):
+    user = get_user_by_email(request.email)
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found for this email")
+    if user.get("is_verified"):
+        raise HTTPException(status_code=400, detail="Account already verified")
+    otp = generate_otp()
+    expires_at = (datetime.utcnow() + timedelta(minutes=10)).isoformat()
+    update_otp(request.email, otp, expires_at)
+    await send_otp_email(request.email, user["name"], otp)
+    return {"message": "OTP resent"}
 
 @app.post("/login")
 def login(request: LoginRequest):
     user = get_user_by_email(request.email)
-    if not user or not bcrypt.checkpw(request.password.encode(), user["password"].encode()):
+    if not user or not user.get("password"):
+        raise HTTPException(status_code=401, detail="This email is registered via Google. Please use 'Continue with Google' to sign in.")
+    if not bcrypt.checkpw(request.password.encode(), user["password"].encode()):
         raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not user.get("is_verified"):
+        raise HTTPException(status_code=403, detail="Please verify your email before logging in")
     token = jwt.encode({"id": user["id"], "name": user["name"], "email": user["email"]}, SECRET_KEY, algorithm="HS256")
     return {"token": token, "name": user["name"]}
 
@@ -185,6 +269,8 @@ def update_name(request: UpdateNameRequest, user=Depends(get_current_user)):
 @app.put("/api/me/password")
 def update_password(request: UpdatePasswordRequest, user=Depends(get_current_user)):
     u = get_user_by_id(user["id"])
+    if not u.get("password"):
+        raise HTTPException(status_code=400, detail="This account signed up with Google and has no password set. Use 'Continue with Google' to sign in.")
     if not bcrypt.checkpw(request.current_password.encode(), u["password"].encode()):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     if len(request.new_password) < 6:
@@ -217,6 +303,8 @@ def get_models():
 @app.post("/chat")
 def chat(request: ChatRequest, user=Depends(get_current_user)):
     u = get_user_by_id(user["id"])
+    if not u:
+        raise HTTPException(status_code=401, detail="User not found. Please log out and log in again.")
     model = request.model if request.model in AVAILABLE_MODELS else u.get("default_model", "llama-3.3-70b-versatile")
     system_prompt = u.get("system_prompt", "")
     save_message(request.session_id, user["id"], "user", request.message)
@@ -224,20 +312,38 @@ def chat(request: ChatRequest, user=Depends(get_current_user)):
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
-    messages.extend(history)
-    response = client.chat.completions.create(model=model, messages=messages)
-    reply = response.choices[0].message.content
-    save_message(request.session_id, user["id"], "assistant", reply)
-    return {"reply": reply}
+    # history rows now carry created_at (for timestamps in the UI) - the Groq API
+    # only accepts role/content, so strip the extra field before sending it up.
+    messages.extend({"role": h["role"], "content": h["content"]} for h in history)
+
+    def generate():
+        full_reply = ""
+        try:
+            stream = client.chat.completions.create(model=model, messages=messages, stream=True)
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    full_reply += delta
+                    yield delta
+        finally:
+            # Save whatever was generated even if the client disconnected/aborted mid-stream,
+            # so a "stopped" reply isn't silently lost from history.
+            if full_reply:
+                save_message(request.session_id, user["id"], "assistant", full_reply)
+
+    return StreamingResponse(generate(), media_type="text/plain")
 
 @app.post("/retry")
 def retry(request: ChatRequest, user=Depends(get_current_user)):
     u = get_user_by_id(user["id"])
+    if not u:
+        raise HTTPException(status_code=401, detail="User not found. Please log out and log in again.")
     model = request.model if request.model in AVAILABLE_MODELS else u.get("default_model", "llama-3.3-70b-versatile")
     history = get_history(request.session_id)
     if history and history[-1]["role"] == "assistant":
         history = history[:-1]
-    response = client.chat.completions.create(model=model, messages=history)
+    messages = [{"role": h["role"], "content": h["content"]} for h in history]
+    response = client.chat.completions.create(model=model, messages=messages)
     reply = response.choices[0].message.content
     save_message(request.session_id, user["id"], "assistant", reply)
     return {"reply": reply}
@@ -262,39 +368,110 @@ def save_topic_endpoint(request: SaveTopicRequest, user=Depends(get_current_user
 
 @app.get("/topics")
 def topics(user=Depends(get_current_user)):
-    return {"topics": get_all_topics(user["id"])}
+    return {"topics": get_all_topics(user["id"]), "pinned": get_pinned_sessions(user["id"])}
+
+@app.post("/toggle-pin")
+def toggle_pin_endpoint(request: PinRequest, user=Depends(get_current_user)):
+    is_pinned = toggle_pin(request.session_id, user["id"])
+    return {"pinned": is_pinned}
 
 @app.post("/upload-image")
-async def upload_image(file: UploadFile = File(...), user=Depends(get_current_user)):
+async def upload_image(session_id: str = Form(...), file: UploadFile = File(...), user=Depends(get_current_user)):
     contents = await file.read()
+    content_type = file.content_type or "image/jpeg"
+
+    # The #1 cause of slow image analysis is sending a full-resolution phone photo
+    # (often 3000px+, several MB) straight to the vision model - more pixels means
+    # more image tokens means much longer inference. Downscaling to a max of 1024px
+    # keeps plenty of detail for "describe this image" while cutting analysis time
+    # dramatically. Falls back to the original bytes if Pillow isn't installed.
+    try:
+        from PIL import Image
+        import io
+        img = Image.open(io.BytesIO(contents))
+        img = img.convert("RGB")
+        img.thumbnail((1024, 1024))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        contents = buf.getvalue()
+        content_type = "image/jpeg"
+    except Exception as e:
+        print("Image resize skipped:", e)
+
     b64 = base64.b64encode(contents).decode("utf-8")
-    response = client.chat.completions.create(
-        model="meta-llama/llama-4-maverick-17b-128e-instruct",
-        messages=[{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": f"data:{file.content_type};base64,{b64}"}},
-            {"type": "text", "text": "Describe this image in detail."}
-        ]}]
-    )
-    return {"reply": response.choices[0].message.content}
+    data_url = f"data:{content_type};base64,{b64}"
+    # Persist the user side immediately so the thumbnail survives a reload even if
+    # the model call below is slow or fails.
+    save_message(session_id, user["id"], "user", f"[[image]]{data_url}")
+
+    def generate():
+        full_reply = ""
+        try:
+            stream = client.chat.completions.create(
+                model="meta-llama/llama-4-maverick-17b-128e-instruct",
+                messages=[{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                    {"type": "text", "text": "Describe this image in detail."}
+                ]}],
+                stream=True
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    full_reply += delta
+                    yield delta
+        finally:
+            if full_reply:
+                save_message(session_id, user["id"], "assistant", full_reply)
+
+    return StreamingResponse(generate(), media_type="text/plain")
 
 @app.post("/upload-file")
-async def upload_file(file: UploadFile = File(...), user=Depends(get_current_user)):
+async def upload_file(session_id: str = Form(...), file: UploadFile = File(...), user=Depends(get_current_user)):
     contents = await file.read()
-    if file.filename.endswith(".pdf"):
+    text = ""
+
+    if file.filename.lower().endswith(".pdf"):
         try:
-            import pypdf, io
+            import pypdf
+        except ImportError:
+            save_message(session_id, user["id"], "user", f"📄 {file.filename}")
+            reply = "I can't read PDFs right now because the `pypdf` library isn't installed on the server. Run `pip install pypdf` and try again."
+            save_message(session_id, user["id"], "assistant", reply)
+            return {"reply": reply}
+        try:
+            import io
             reader = pypdf.PdfReader(io.BytesIO(contents))
-            text = " ".join([page.extract_text() for page in reader.pages if page.extract_text()])
-        except:
-            text = contents.decode("utf-8", errors="ignore")
+            pages_text = [(page.extract_text() or "") for page in reader.pages]
+            text = " ".join(t for t in pages_text if t.strip())
+        except Exception as e:
+            print("PDF extraction error:", e)
+            text = ""  # don't fall back to decoding raw PDF bytes as text - that's garbage input
     else:
-        text = contents.decode("utf-8", errors="ignore")
-    text = text[:3000]
+        try:
+            text = contents.decode("utf-8")
+        except UnicodeDecodeError:
+            text = ""
+
+    save_message(session_id, user["id"], "user", f"📄 {file.filename}")
+
+    if not text.strip():
+        reply = (
+            "I couldn't extract any readable text from this file. If it's a scanned/image-based PDF "
+            "(no selectable text), text extraction won't work on it - try a text-based PDF, DOCX exported as PDF, "
+            "or a .txt file instead."
+        )
+        save_message(session_id, user["id"], "assistant", reply)
+        return {"reply": reply}
+
+    text = text[:6000]
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": f"Summarize this document clearly:\n\n{text}"}]
     )
-    return {"reply": response.choices[0].message.content}
+    reply = response.choices[0].message.content
+    save_message(session_id, user["id"], "assistant", reply)
+    return {"reply": reply}
 
 @app.post("/share-chat")
 def share_chat(request: ShareChatRequest, user=Depends(get_current_user)):
